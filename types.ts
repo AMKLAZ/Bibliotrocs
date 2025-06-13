@@ -1,4 +1,3 @@
-
 // import { Book } from './types'; // Forward declaration for Book - REMOVED
 
 export interface ChatMessage {
@@ -6,28 +5,30 @@ export interface ChatMessage {
   text: string | React.ReactNode; // Can be simple text or a component (e.g., for book display)
   sender: 'user' | 'bot' | 'system';
   timestamp: Date;
-  photoPreviewUrl?: string; // For user messages with photo uploads
-  bookForDisplay?: Book; // For bot messages displaying a book
+  photoPreviewUrl?: string; // For user messages with photo uploads (blob URLs)
+  bookForDisplay?: Book; // For bot messages displaying a book (photoPreviewUrl here would be base64 from DB)
   actionButtons?: { text: string; onClick: () => void }[];
 }
 
 export interface Book {
-  id: string;
-  photoFile?: File; 
-  photoPreviewUrl?: string; 
+  id: string; // Firestore document ID
+  photoFile?: File;  // Used during form submission process, not stored in Firestore
+  photoPreviewUrl?: string; // Stored in Firestore as base64 data URL if image provided
   title: string;
   classLevel: string;
   publisher: string;
   editionYear: string;
-  sellerPrice: number;
+  sellerPrice: number; // Price set by seller
   sellerName: string;
   sellerEmail: string;
   sellerPhone: string;
   status: 'available' | 'sold';
+  // Note: Firestore typically stores dates as Timestamps. 
+  // Conversion to/from JS Date objects is handled in services/livresService.ts or by Firestore SDK.
 }
 
 export interface BuyRequest {
-  id:string;
+  id: string; // Firestore document ID
   title: string;
   classLevel: string;
   publisher: string;
@@ -42,7 +43,7 @@ export interface AppNotification {
   type: 'match' | 'info' | 'error' | 'success';
   message: string;
   bookDetails?: Book;
-  totalPrice?: number; 
+  totalPrice?: number; // Price including service fee
   contactNumber?: string;
   buyerEmail?: string; 
 }
@@ -52,6 +53,7 @@ export type ConversationState =
   | 'AWAITING_ACTION'
   // Selling states
   | 'SELLING_AWAITING_PHOTO'
+  | 'SELLING_AWAITING_CONFIRMATION_FROM_IMAGE' // New state
   | 'SELLING_AWAITING_TITLE'
   | 'SELLING_AWAITING_CLASS_LEVEL'
   | 'SELLING_AWAITING_PUBLISHER'
@@ -72,7 +74,7 @@ export type ConversationState =
 
 export interface SellingFormData {
   photoFile?: File;
-  photoPreviewUrl?: string;
+  photoPreviewUrl?: string; // Temporary blob URL for UI preview
   title?: string;
   classLevel?: string;
   publisher?: string;
@@ -90,4 +92,11 @@ export interface BuyingFormData {
   editionYear?: string;
   buyerEmail?: string;
   buyerPhone?: string;
+}
+
+export interface ExtractedBookInfo {
+  title?: string;
+  classLevel?: string;
+  publisher?: string;
+  editionYear?: string;
 }

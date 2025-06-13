@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { ChatMessage, ConversationState, SellingFormData, BuyingFormData, Book as BookType, AppNotification } from '../types';
 import { useBookContext } from '../context/BookContext';
@@ -13,16 +14,22 @@ export const useChatController = () => {
   const [buyingData, setBuyingData] = useState<BuyingFormData>({});
   const [isBotTyping, setIsBotTyping] = useState(false);
 
+  // Refs for latest callback versions
+  const processInitialActionRef = useRef<typeof processInitialAction>(null!);
+  const handleUserInputRef = useRef<typeof handleUserInput>(null!);
+  const handleInitialMessageRef = useRef<typeof handleInitialMessage>(null!);
+
+
   const addMessage = useCallback((text: string | React.ReactNode, sender: ChatMessage['sender'], photoPreviewUrl?: string, bookForDisplay?: BookType, actionButtons?: ChatMessage['actionButtons']) => {
     setMessages(prev => [...prev, { id: generateId(), text, sender, timestamp: new Date(), photoPreviewUrl, bookForDisplay, actionButtons }]);
     if (sender === 'bot') setIsBotTyping(false);
   }, []);
   
-  const simulateBotTyping = async (duration: number = 700) => {
+  const simulateBotTyping = useCallback(async (duration: number = 700) => {
     setIsBotTyping(true);
     await new Promise(resolve => setTimeout(resolve, duration));
     // isBotTyping will be set to false when addMessage(..., 'bot') is called
-  };
+  }, []);
 
 
   const processInitialAction = useCallback(async (action: 'sell' | 'buy' | 'browse') => {
@@ -34,7 +41,11 @@ export const useChatController = () => {
         { text: "Passer l'étape photo", onClick: () => {
             setSellingData(prev => ({ ...prev, photoFile: undefined, photoPreviewUrl: undefined }));
             setConversationState('SELLING_AWAITING_TITLE');
-            addMessage("D'accord, passons à la suite. Quel est le titre complet du livre ?", 'bot');
+            // User message for skipping photo
+            addMessage("J'ai cliqué sur 'Passer l'étape photo'.", 'user');
+            simulateBotTyping().then(() => {
+                 addMessage("D'accord, passons à la suite. Quel est le titre complet du livre ?", 'bot');
+            });
         }}
       ]);
     } else if (action === 'buy') {
@@ -52,16 +63,15 @@ export const useChatController = () => {
       } else {
         addMessage("Il n'y a aucun livre disponible pour le moment. Revenez plus tard !", 'bot');
       }
-      // Reset to awaiting action after browsing
       await simulateBotTyping(300);
       setConversationState('AWAITING_ACTION');
       addMessage("Que souhaitez-vous faire d'autre ?", 'bot', undefined, undefined, [
-          { text: "Vendre un livre", onClick: () => handleUserInput("vendre") },
-          { text: "Acheter un livre", onClick: () => handleUserInput("acheter") },
-          { text: "Voir les livres", onClick: () => handleUserInput("parcourir") },
+          { text: "Vendre un livre", onClick: () => handleUserInputRef.current("vendre") },
+          { text: "Acheter un livre", onClick: () => handleUserInputRef.current("acheter") },
+          { text: "Voir les livres", onClick: () => handleUserInputRef.current("parcourir") },
       ]);
     }
-  }, [addMessage, listAvailableBooks]);
+  }, [addMessage, listAvailableBooks, simulateBotTyping, setConversationState, setSellingData, setBuyingData]);
 
   const handleInitialMessage = useCallback(async () => {
     await simulateBotTyping();
@@ -71,62 +81,51 @@ export const useChatController = () => {
       undefined,
       undefined,
       [
-        { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialAction('sell'); } },
-        { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialAction('buy'); } },
-        { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); processInitialAction('browse'); } },
+        { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialActionRef.current('sell'); } },
+        { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialActionRef.current('buy'); } },
+        { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); processInitialActionRef.current('browse'); } },
       ]
     );
     setConversationState('AWAITING_ACTION');
-  }, [addMessage, processInitialAction]);
-
-  useEffect(() => {
-    if (messages.length === 0) {
-      handleInitialMessage();
-    }
-  }, [handleInitialMessage, messages.length]);
-
-  // Effect to process notifications from BookContext
-  useEffect(() => {
-    if (notifications.length > 0) {
-      notifications.forEach(async (notif) => {
-        await simulateBotTyping(300);
-        let messageText = notif.message;
-        if (notif.type === 'match' && notif.bookDetails) {
-            messageText += `\nLivre: ${notif.bookDetails.title}\nPrix Total: ${notif.totalPrice}F CFA.`;
-            messageText += `\nContactez le vendeur via WhatsApp: ${notif.contactNumber}`;
-            if (notif.buyerEmail) messageText += `\n(Notification également envoyée à ${notif.buyerEmail})`;
-            addMessage(messageText, 'system', undefined, notif.bookDetails);
-        } else {
-            addMessage(`ℹ️ ${messageText}`, 'system');
-        }
-        clearNotification(notif.id);
-      });
-    }
-  }, [notifications, clearNotification, addMessage]);
-
+  }, [addMessage, simulateBotTyping, setConversationState]);
 
   const handleUserInput = useCallback(async (input: string | File, rawInputText?: string) => {
     if (typeof input !== 'string' && !(input instanceof File)) return;
 
     const userMessageText = typeof input === 'string' ? input : (rawInputText || "Photo envoyée");
-    addMessage(userMessageText, 'user', typeof input !== 'string' ? URL.createObjectURL(input) : undefined);
+    
+    if (rawInputText !== undefined || typeof input === 'string' || input instanceof File) {
+       // Avoid adding user message if it's an internal call like from action buttons that already added a user message
+       const isButtonClickCall = (rawInputText === "vendre" || rawInputText === "acheter" || rawInputText === "parcourir") && typeof input === 'string' && input === rawInputText;
+       if (!isButtonClickCall && (rawInputText !== "vendre" && rawInputText !== "acheter" && rawInputText !== "parcourir")) {
+           let photoUrl;
+           if (input instanceof File) {
+             photoUrl = URL.createObjectURL(input);
+           }
+           addMessage(userMessageText, 'user', photoUrl);
+            // Temporary URL for user message display, revoke if it's a file
+           if (photoUrl && input instanceof File) {
+            //   URL.revokeObjectURL(photoUrl); // Revoke after a short delay or manage carefully
+           }
+       }
+    }
+    
     await simulateBotTyping();
 
     switch (conversationState) {
       case 'AWAITING_ACTION':
         const actionText = typeof input === 'string' ? input.toLowerCase() : '';
-        if (actionText.includes('vendre')) processInitialAction('sell');
-        else if (actionText.includes('acheter')) processInitialAction('buy');
-        else if (actionText.includes('parcourir') || actionText.includes('voir') || actionText.includes('liste')) processInitialAction('browse');
+        if (actionText.includes('vendre')) processInitialActionRef.current('sell');
+        else if (actionText.includes('acheter')) processInitialActionRef.current('buy');
+        else if (actionText.includes('parcourir') || actionText.includes('voir') || actionText.includes('liste')) processInitialActionRef.current('browse');
         else addMessage("Je n'ai pas compris. Vous pouvez 'vendre', 'acheter' ou 'parcourir' les livres.", 'bot');
         break;
 
-      // Selling Flow
       case 'SELLING_AWAITING_PHOTO':
         if (input instanceof File) {
           const photoPreviewUrl = URL.createObjectURL(input);
           setSellingData(prev => ({ ...prev, photoFile: input, photoPreviewUrl }));
-          addMessage("Photo reçue ! Quel est le titre complet du livre ?", 'bot', photoPreviewUrl);
+          addMessage("Photo reçue ! Quel est le titre complet du livre ?", 'bot', photoPreviewUrl); 
           setConversationState('SELLING_AWAITING_TITLE');
         } else {
           addMessage("Veuillez télécharger une image ou cliquer sur 'Passer l'étape photo'.", 'bot');
@@ -168,7 +167,6 @@ export const useChatController = () => {
         setConversationState('SELLING_AWAITING_SELLER_EMAIL');
         break;
       case 'SELLING_AWAITING_SELLER_EMAIL':
-        // Basic email validation
         if (!(input as string).includes('@') || !(input as string).includes('.')) {
              addMessage("Veuillez entrer une adresse email valide.", 'bot');
              break;
@@ -179,7 +177,6 @@ export const useChatController = () => {
         break;
       case 'SELLING_AWAITING_SELLER_PHONE':
         setSellingData(prev => ({ ...prev, sellerPhone: input as string }));
-        // All data collected for selling
         try {
           const bookToSell = {
             title: sellingData.title!,
@@ -189,31 +186,35 @@ export const useChatController = () => {
             sellerPrice: sellingData.sellerPrice!,
             sellerName: sellingData.sellerName!,
             sellerEmail: sellingData.sellerEmail!,
-            sellerPhone: input as string, // last input is phone
+            sellerPhone: input as string, // This is the final piece of sellingData
             photoFile: sellingData.photoFile,
           };
-          addBookForSale(bookToSell); // This will trigger a success notification via context
-          addMessage(`Merci ! Votre livre "${sellingData.title}" a été mis en vente. Le prix demandé est de ${sellingData.sellerPrice}F CFA. L'acheteur verra un prix de ${sellingData.sellerPrice! + SERVICE_FEE}F CFA.`, 'bot', sellingData.photoPreviewUrl);
+          const newBook = addBookForSale(bookToSell); // addBookForSale now returns the created book with its own photoPreviewUrl
           
-          if(sellingData.photoPreviewUrl) {
-            URL.revokeObjectURL(sellingData.photoPreviewUrl); // Clean up temp URL
+          // Main success message from the bot, with final book details
+          addMessage(`Merci ! Votre livre "${newBook.title}" a été mis en vente. Votre prix est de ${newBook.sellerPrice}F CFA. L'acheteur verra un prix de ${newBook.sellerPrice + SERVICE_FEE}F CFA.`, 'bot', newBook.photoPreviewUrl);
+          
+          // Clean up the temporary photoPreviewUrl stored in sellingData if it came from a File object
+          if (sellingData.photoPreviewUrl && sellingData.photoFile) {
+            URL.revokeObjectURL(sellingData.photoPreviewUrl);
           }
+          // The BookContext will manage the newBook.photoPreviewUrl lifecycle.
+          // Notification about admin email simulation will be handled by BookContext and displayed as a system message.
 
         } catch (error) {
           console.error("Error selling book:", error);
           addNotificationManual({type: 'error', message: "Une erreur s'est produite lors de la mise en vente."});
         }
-        setSellingData({});
+        setSellingData({}); // Reset form data
         setConversationState('AWAITING_ACTION');
         await simulateBotTyping(300);
         addMessage("Que souhaitez-vous faire maintenant ?", 'bot', undefined, undefined, [
-            { text: "Vendre un autre livre", onClick: () => processInitialAction('sell') },
-            { text: "Acheter un livre", onClick: () => processInitialAction('buy') },
-            { text: "Voir les livres", onClick: () => processInitialAction('browse') },
+            { text: "Vendre un autre livre", onClick: () => { addMessage("Je veux vendre un autre livre.", 'user'); processInitialActionRef.current('sell'); } },
+            { text: "Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialActionRef.current('buy'); } },
+            { text: "Voir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); processInitialActionRef.current('browse'); } },
         ]);
         break;
 
-      // Buying Flow
       case 'BUYING_AWAITING_TITLE':
         setBuyingData(prev => ({ ...prev, title: input as string }));
         addMessage("Quelle est la classe ou le niveau scolaire ?", 'bot');
@@ -252,10 +253,9 @@ export const useChatController = () => {
                 publisher: buyingData.publisher!,
                 editionYear: buyingData.editionYear!,
                 buyerEmail: buyingData.buyerEmail!,
-                buyerPhone: input as string, // last input is phone
+                buyerPhone: input as string,
             };
-            addBuyRequest(requestData); // This will trigger match or info notification via context.
-            // The notification itself will be handled by the useEffect for notifications.
+            addBuyRequest(requestData); // This will trigger notifications from BookContext
         } catch (error) {
             console.error("Error submitting buy request:", error);
             addNotificationManual({type: 'error', message: "Une erreur s'est produite lors de la soumission de votre demande."});
@@ -265,9 +265,9 @@ export const useChatController = () => {
         setConversationState('AWAITING_ACTION');
         await simulateBotTyping(300);
         addMessage("Que souhaitez-vous faire maintenant ?", 'bot', undefined, undefined, [
-            { text: "Vendre un livre", onClick: () => processInitialAction('sell') },
-            { text: "Faire une autre demande d'achat", onClick: () => processInitialAction('buy') },
-            { text: "Voir les livres", onClick: () => processInitialAction('browse') },
+            { text: "Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialActionRef.current('sell'); } },
+            { text: "Faire une autre demande d'achat", onClick: () => { addMessage("Je veux acheter un autre livre.", 'user'); processInitialActionRef.current('buy'); } },
+            { text: "Voir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); processInitialActionRef.current('browse'); } },
         ]);
         break;
       
@@ -275,10 +275,47 @@ export const useChatController = () => {
         addMessage("Je suis un peu perdu. Essayons autre chose.", 'bot');
         setConversationState('AWAITING_ACTION');
         await simulateBotTyping(300);
-        handleInitialMessage(); // Restart conversation flow
+        handleInitialMessageRef.current(); // Use ref here
         break;
     }
-  }, [conversationState, addMessage, sellingData, buyingData, addBookForSale, addBuyRequest, processInitialAction, addNotificationManual, handleInitialMessage]);
+  }, [
+      conversationState, addMessage, sellingData, buyingData, addBookForSale, addBuyRequest, 
+      addNotificationManual, simulateBotTyping, setSellingData, setBuyingData, setConversationState, 
+      listAvailableBooks // Added missing dependency
+    ]
+  );
+  
+  // Update refs whenever the callback functions themselves are recreated
+  useEffect(() => { processInitialActionRef.current = processInitialAction; }, [processInitialAction]);
+  useEffect(() => { handleUserInputRef.current = handleUserInput; }, [handleUserInput]);
+  useEffect(() => { handleInitialMessageRef.current = handleInitialMessage; }, [handleInitialMessage]);
 
-  return { messages, handleUserInput, conversationState, isBotTyping };
+  // Initial message effect
+  useEffect(() => {
+    if (messages.length === 0) {
+      handleInitialMessageRef.current();
+    }
+  }, [messages.length]); 
+
+  // Effect to process notifications from BookContext
+  useEffect(() => {
+    if (notifications.length > 0) {
+      notifications.forEach(async (notif) => {
+        await simulateBotTyping(300);
+        let messageText = notif.message;
+        if (notif.type === 'match' && notif.bookDetails) {
+            messageText += `\nLivre: ${notif.bookDetails.title}\nPrix Total: ${notif.totalPrice}F CFA.`;
+            messageText += `\nContactez le vendeur via WhatsApp: ${notif.contactNumber}`;
+            if (notif.buyerEmail) messageText += `\n(Notification également envoyée à ${notif.buyerEmail})`;
+            addMessage(messageText, 'system', undefined, notif.bookDetails);
+        } else { // Handles 'info', 'error', 'success', and our new admin email info
+            addMessage(`ℹ️ ${messageText}`, 'system');
+        }
+        clearNotification(notif.id);
+      });
+    }
+  }, [notifications, clearNotification, addMessage, simulateBotTyping]);
+
+
+  return { messages, handleUserInput: handleUserInputRef.current, conversationState, isBotTyping };
 };

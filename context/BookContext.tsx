@@ -1,3 +1,4 @@
+
 import React, { createContext, useState, useCallback, ReactNode, useContext, useEffect } from 'react';
 import { Book, BuyRequest, AppNotification } from '../types';
 import { SERVICE_FEE, WHATSAPP_CONTACT_NUMBER } from '../constants';
@@ -61,7 +62,8 @@ export const BookProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
     
     setBooksForSale(prev => [...prev, newBook]);
-    addNotificationManual({ type: 'success', message: `Livre "${newBook.title}" ajouté avec succès ! Le prix affiché sera de ${newBook.sellerPrice + SERVICE_FEE}F CFA.` });
+    // The primary success message is now handled by useChatController for better context (with photo).
+    // We will add a specific notification for the admin email simulation.
 
     // Simulate admin email notification
     const adminEmailSubject = `Nouveau livre en vente: ${newBook.title}`;
@@ -85,6 +87,7 @@ Cordialement,
 L'équipe BiblioTroc
     `;
     simulateSendAdminEmail(adminEmailSubject, adminEmailBody.trim());
+    addNotificationManual({ type: 'info', message: `Email admin (simulation) envoyé pour la vente de "${newBook.title}". Voir console pour détails.` });
 
 
     const matchingRequests = buyRequests.filter(req => 
@@ -116,7 +119,6 @@ L'équipe BiblioTroc
       status: 'pending',
     };
     
-    // Simulate admin email notification for buy request
     const adminEmailSubjectRequest = `Nouvelle demande d'achat: ${newRequest.title}`;
     const adminEmailBodyRequest = `
 Une nouvelle demande d'achat a été enregistrée sur BiblioTroc:
@@ -134,6 +136,7 @@ Cordialement,
 L'équipe BiblioTroc
     `;
     simulateSendAdminEmail(adminEmailSubjectRequest, adminEmailBodyRequest.trim());
+    const adminEmailConfirmationText = ` (Email admin (simulation) envoyé pour cette demande. Voir console pour détails.)`;
 
     const matchedBook = booksForSale.find(book => 
       book.status === 'available' &&
@@ -146,7 +149,7 @@ L'équipe BiblioTroc
     if (matchedBook) {
       addNotificationManual({
         type: 'match',
-        message: `Bonne nouvelle ! Le livre "${matchedBook.title}" que vous recherchez est disponible.`,
+        message: `Bonne nouvelle ! Le livre "${matchedBook.title}" que vous recherchez est disponible.${adminEmailConfirmationText}`,
         bookDetails: matchedBook,
         totalPrice: matchedBook.sellerPrice + SERVICE_FEE,
         contactNumber: WHATSAPP_CONTACT_NUMBER,
@@ -157,7 +160,7 @@ L'équipe BiblioTroc
     } else {
       addNotificationManual({
         type: 'info',
-        message: `Merci pour votre demande pour "${newRequest.title}". Nous vous contacterons par mail dès que ce livre sera disponible.`,
+        message: `Merci pour votre demande pour "${newRequest.title}". Nous vous contacterons par mail dès que ce livre sera disponible.${adminEmailConfirmationText}`,
         buyerEmail: newRequest.buyerEmail
       });
       setBuyRequests(prev => [...prev, newRequest]);
@@ -170,7 +173,6 @@ L'équipe BiblioTroc
   }, [booksForSale]);
   
   useEffect(() => {
-    // Clean up Object URLs when component unmounts or booksForSale changes
     return () => {
       booksForSale.forEach(book => {
         if (book.photoPreviewUrl) {

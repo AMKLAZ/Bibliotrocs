@@ -1,0 +1,8 @@
+{
+  "name": "BiblioTroc",
+  "description": "BiblioTroc est un assistant intelligent de bibliothèque communautaire pour faciliter l’échange et la vente de livres scolaires entre utilisateurs.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "prompt": ""
+}

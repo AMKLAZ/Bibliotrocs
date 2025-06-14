@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { ExtractedBookInfo } from '../types';
 
@@ -5,10 +6,10 @@ import { ExtractedBookInfo } from '../types';
 const API_KEY = process.env.API_KEY;
 
 if (!API_KEY) {
-  console.error("API_KEY for Gemini is not set. Image analysis will not work.");
+  console.error("API_KEY for Gemini is not set. Image analysis and text generation will not work reliably.");
 }
 
-const ai = new GoogleGenAI({ apiKey: API_KEY! }); // API_KEY can be null if not set, handle this gracefully or ensure it's always there.
+const ai = new GoogleGenAI({ apiKey: API_KEY! }); 
 
 const GEMINI_MODEL = 'gemini-2.5-flash-preview-04-17';
 
@@ -40,7 +41,7 @@ export const extractBookInfoFromImage = async (base64ImageData: string): Promise
   try {
     const imagePart = {
       inlineData: {
-        mimeType: 'image/jpeg', // Assuming JPEG, adjust if necessary (e.g. image/png)
+        mimeType: 'image/jpeg', 
         data: base64ImageData,
       },
     };
@@ -57,15 +58,14 @@ export const extractBookInfoFromImage = async (base64ImageData: string): Promise
     });
     
     let jsonStr = response.text.trim();
-    const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s; // Matches ```json ... ``` or ``` ... ```
+    const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s; 
     const match = jsonStr.match(fenceRegex);
     if (match && match[2]) {
-      jsonStr = match[2].trim(); // Extract content within fences
+      jsonStr = match[2].trim(); 
     }
 
     try {
       const parsedData = JSON.parse(jsonStr);
-      // Basic validation for expected fields (optional)
       const result: ExtractedBookInfo = {
         title: parsedData.title || "",
         classLevel: parsedData.classLevel || "",
@@ -78,7 +78,31 @@ export const extractBookInfoFromImage = async (base64ImageData: string): Promise
       return null;
     }
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
+    console.error("Error calling Gemini API for image analysis:", error);
     return null;
+  }
+};
+
+export const generateTextFromApi = async (promptText: string): Promise<string> => {
+  if (!API_KEY) {
+    console.warn("Gemini API key not configured. Skipping text generation.");
+    return "Je suis désolé, ma configuration interne n'est pas complète pour répondre à cette demande. Veuillez contacter l'administrateur de la plateforme.";
+  }
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: promptText,
+      // No specific systemInstruction or thinkingConfig modification needed for general queries
+      // Default thinkingConfig (enabled) is fine for quality.
+    });
+    
+    return response.text;
+
+  } catch (error) {
+    console.error("Error calling Gemini API for text generation:", error);
+    if (error instanceof Error && error.message.toLowerCase().includes("api key")) {
+        return "Je suis désolé, il y a un problème avec la configuration d'accès au service d'IA. Veuillez contacter l'administrateur.";
+    }
+    return "Je suis désolé, une erreur est survenue lors de la tentative de génération de texte. Veuillez réessayer plus tard ou poser une autre question.";
   }
 };

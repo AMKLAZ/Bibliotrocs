@@ -1,8 +1,10 @@
+
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { ChatMessage, ConversationState, SellingFormData, BuyingFormData, Book as BookType, AppNotification, ExtractedBookInfo } from '../types';
 import { useBookContext } from '../context/BookContext';
 import { SERVICE_FEE, WHATSAPP_CONTACT_NUMBER } from '../constants';
-import { extractBookInfoFromImage } from '../services/aiService'; 
+import { extractBookInfoFromImage, generateTextFromApi } from '../services/aiService'; 
 import { fileToBase64 } from '../utils/fileUtils';
 
 const generateId = () => crypto.randomUUID();
@@ -33,18 +35,18 @@ export const useChatController = () => {
 
     if (confirmed && tempExtractedInfo) {
       setSellingData(prev => ({
-        ...prev, // Keeps photoFile and photoPreviewUrl
+        ...prev, 
         title: tempExtractedInfo.title || '',
         classLevel: tempExtractedInfo.classLevel || '',
         publisher: tempExtractedInfo.publisher || '',
         editionYear: tempExtractedInfo.editionYear || '',
       }));
-      setTempExtractedInfo(null); // Clear temporary info
+      setTempExtractedInfo(null); 
       addMessage(`Parfait ! Quel est le prix que vous souhaitez pour ce livre (en F CFA) ? \nUn complément de ${SERVICE_FEE}F CFA sera ajouté comme frais de service.`, 'bot');
       setConversationState('SELLING_AWAITING_PRICE');
     } else {
-      setTempExtractedInfo(null); // Clear temporary info
-      setSellingData(prev => ({ // Reset potentially pre-filled fields if any, keep photo
+      setTempExtractedInfo(null); 
+      setSellingData(prev => ({ 
         ...prev,
         title: undefined,
         classLevel: undefined,
@@ -68,34 +70,64 @@ export const useChatController = () => {
 
     switch (conversationState) {
       case 'AWAITING_ACTION':
-        const actionText = typeof input === 'string' ? input.toLowerCase() : '';
-        if (actionText.includes('vendre')) (getProcessInitialAction())('sell');
-        else if (actionText.includes('acheter')) (getProcessInitialAction())('buy');
-        else if (actionText.includes('parcourir') || actionText.includes('voir') || actionText.includes('liste')) (getProcessInitialAction())('browse');
-        else addMessage("Je n'ai pas compris. Vous pouvez 'vendre', 'acheter' ou 'parcourir' les livres.", 'bot');
+        if (typeof input === 'string') {
+          const SANE_MAX_INPUT_LENGTH = 1000; // Prevent overly long inputs
+          const trimmedInput = input.trim();
+          
+          if (trimmedInput === '') {
+            addMessage("Veuillez taper une action ou une question.", 'bot');
+            await simulateBotTyping(300);
+            (getHandleInitialMessage())(); // Re-sends the initial greeting and buttons
+            break;
+          }
+
+          const actionText = trimmedInput.toLowerCase();
+          if (actionText.includes('vendre')) {
+            (getProcessInitialAction())('sell');
+          } else if (actionText.includes('acheter')) {
+            (getProcessInitialAction())('buy');
+          } else if (actionText.includes('parcourir') || actionText.includes('voir') || actionText.includes('liste')) {
+            (getProcessInitialAction())('browse');
+          } else { // General text query
+            setIsBotTyping(true);
+            const aiResponseText = await generateTextFromApi(trimmedInput.substring(0, SANE_MAX_INPUT_LENGTH));
+            // setIsBotTyping(false) is handled by addMessage if sender is 'bot'
+
+            addMessage(aiResponseText, 'bot');
+            
+            await simulateBotTyping(300);
+            addMessage("Que souhaitez-vous faire maintenant ?", 'bot', undefined, undefined, [
+              { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); (getProcessInitialAction())('sell'); } },
+              { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); (getProcessInitialAction())('buy'); } },
+              { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); (getProcessInitialAction())('browse'); } },
+            ]);
+            // Remain in AWAITING_ACTION state
+          }
+        } else {
+          // Input is not a string (e.g., a File object, though UI shouldn't allow this in AWAITING_ACTION)
+          addMessage("Je n'ai pas compris votre demande. Veuillez utiliser du texte.", 'bot');
+          await simulateBotTyping(300);
+          (getHandleInitialMessage())(); // Re-prompt
+        }
         break;
 
       case 'SELLING_AWAITING_PHOTO':
         if (input instanceof File) {
           addMessage("Photo reçue. Je vais essayer d'analyser l'image pour récupérer les informations du livre...", 'bot');
-          setIsBotTyping(true); // Show typing while processing
+          setIsBotTyping(true); 
           setSellingData(prev => ({ ...prev, photoFile: input, photoPreviewUrl: photoPreviewForUserMessage }));
           try {
             const base64FullString = await fileToBase64(input);
-            const base64Data = base64FullString.split(',')[1]; // Get only the base64 part
+            const base64Data = base64FullString.split(',')[1]; 
             const extractedInfo = await extractBookInfoFromImage(base64Data);
 
             if (extractedInfo && (extractedInfo.title || extractedInfo.publisher || extractedInfo.classLevel || extractedInfo.editionYear)) {
-              setTempExtractedInfo(extractedInfo); // Store for confirmation step
+              setTempExtractedInfo(extractedInfo); 
               let confirmationMessage = "J'ai analysé l'image et voici ce que j'ai pu lire :\n";
-              if (extractedInfo.title) confirmationMessage += `Titre: ${extractedInfo.title}\n`;
-              else confirmationMessage += `Titre: (non détecté)\n`;
-              if (extractedInfo.classLevel) confirmationMessage += `Classe: ${extractedInfo.classLevel}\n`;
-              else confirmationMessage += `Classe: (non détectée)\n`;
-              if (extractedInfo.publisher) confirmationMessage += `Maison d'édition: ${extractedInfo.publisher}\n`;
-              else confirmationMessage += `Maison d'édition: (non détectée)\n`;
-              if (extractedInfo.editionYear) confirmationMessage += `Année d'édition: ${extractedInfo.editionYear}\n`;
-              else confirmationMessage += `Année d'édition: (non détectée)\n`;
+              confirmationMessage += `Titre: ${extractedInfo.title || '(non détecté)'}\n`;
+              confirmationMessage += `Classe: ${extractedInfo.classLevel || '(non détectée)'}\n`;
+              confirmationMessage += `Maison d'édition: ${extractedInfo.publisher || '(non détectée)'}\n`;
+              confirmationMessage += `Année d'édition: ${extractedInfo.editionYear || '(non détectée)'}\n`;
               confirmationMessage += "\nCes informations sont-elles correctes ?";
               
               addMessage(confirmationMessage, 'bot', undefined, undefined, [
@@ -112,7 +144,7 @@ export const useChatController = () => {
             addMessage("Une erreur est survenue lors de l'analyse de l'image. Quel est le titre complet du livre ?", 'bot');
             setConversationState('SELLING_AWAITING_TITLE');
           } finally {
-            setIsBotTyping(false); // Hide typing
+            // setIsBotTyping(false) handled by addMessage from bot
           }
         } else {
           addMessage("Veuillez télécharger une image ou cliquer sur 'Passer l'étape photo'.", 'bot');
@@ -120,8 +152,6 @@ export const useChatController = () => {
         break;
       
       case 'SELLING_AWAITING_CONFIRMATION_FROM_IMAGE':
-        // This state is now primarily handled by button clicks routed to `handleImageInfoConfirmation`.
-        // If user types instead of clicking a button:
         addMessage("Veuillez utiliser les boutons 'Oui' ou 'Non' pour confirmer les informations.", 'bot');
         break;
 
@@ -170,12 +200,10 @@ export const useChatController = () => {
         setConversationState('SELLING_AWAITING_SELLER_PHONE');
         break;
       case 'SELLING_AWAITING_SELLER_PHONE':
-        // Ensure all required fields are present before saving
         const finalSellingData = { ...sellingData, sellerPhone: input as string };
         if (!finalSellingData.title || !finalSellingData.classLevel || !finalSellingData.publisher || !finalSellingData.editionYear || !finalSellingData.sellerPrice || !finalSellingData.sellerName || !finalSellingData.sellerEmail || !finalSellingData.sellerPhone) {
             addMessage("Il semble que des informations soient manquantes. Veuillez vérifier et recommencer le processus de vente si besoin.", 'bot');
             setConversationState('AWAITING_ACTION');
-            // Provide main action buttons again
             await simulateBotTyping(300);
             (getHandleInitialMessage())();
             break;
@@ -190,22 +218,22 @@ export const useChatController = () => {
             sellerPrice: finalSellingData.sellerPrice!,
             sellerName: finalSellingData.sellerName!,
             sellerEmail: finalSellingData.sellerEmail!,
-            sellerPhone: finalSellingData.sellerPhone, // Already set
-            photoFile: finalSellingData.photoFile, // photoFile is already in sellingData
+            sellerPhone: finalSellingData.sellerPhone,
+            photoFile: finalSellingData.photoFile, 
           };
           const savedBook = await addBookForSale(bookToSellPayload);
           
-          addMessage(`Merci ! Votre livre "${savedBook.title}" a été mis en vente. Le prix demandé est de ${savedBook.sellerPrice}F CFA. L'acheteur verra un prix de ${savedBook.sellerPrice + SERVICE_FEE}F CFA.`, 'bot', savedBook.photoPreviewUrl); // savedBook.photoPreviewUrl will be base64 from DB
+          addMessage(`Merci ! Votre livre "${savedBook.title}" a été mis en vente. Le prix demandé est de ${savedBook.sellerPrice}F CFA. L'acheteur verra un prix de ${savedBook.sellerPrice + SERVICE_FEE}F CFA.`, 'bot', savedBook.photoPreviewUrl); 
           
           if(sellingData.photoPreviewUrl && sellingData.photoPreviewUrl.startsWith('blob:')) {
-            URL.revokeObjectURL(sellingData.photoPreviewUrl); // Clean up blob URL for user's own preview
+            URL.revokeObjectURL(sellingData.photoPreviewUrl); 
           }
 
         } catch (error) {
           console.error("Error selling book:", error);
           addNotificationManual({type: 'error', message: "Une erreur s'est produite lors de la mise en vente."});
         }
-        setSellingData({}); // Reset form data
+        setSellingData({}); 
         setConversationState('AWAITING_ACTION');
         await simulateBotTyping(300);
         addMessage("Que souhaitez-vous faire maintenant ?", 'bot', undefined, undefined, [
@@ -278,19 +306,15 @@ export const useChatController = () => {
         (getHandleInitialMessage())();
         break;
     }
-
-    // Clean up temporary blob URL for user's own message preview if it wasn't used for SELLING_AWAITING_PHOTO's sellingData.photoPreviewUrl
-    // This is now handled by sellingData.photoPreviewUrl being set correctly.
-    // The revoke for the final book selling message is after addBookForSale if sellingData.photoPreviewUrl was a blob.
   }, [conversationState, addMessage, sellingData, buyingData, addBookForSale, addBuyRequest, addNotificationManual, listAvailableBooks, handleImageInfoConfirmation]);
 
 
   const processInitialAction = useCallback(async (action: 'sell' | 'buy' | 'browse') => {
-    await simulateBotTyping();
+    // await simulateBotTyping(); // simulateBotTyping is called by handleUserInput or button click handlers before this
     if (action === 'sell') {
       setConversationState('SELLING_AWAITING_PHOTO');
-      setSellingData({}); // Reset selling data for new sale
-      setTempExtractedInfo(null); // Clear any old extracted info
+      setSellingData({}); 
+      setTempExtractedInfo(null); 
       addMessage("Super ! Pour commencer, veuillez envoyer une photo de la couverture du livre.", 'bot', undefined, undefined, [
         { text: "Passer l'étape photo", onClick: async () => {
             addMessage("Je passe l'étape photo.", 'user');
@@ -305,16 +329,14 @@ export const useChatController = () => {
       setBuyingData({});
       addMessage("Entendu. Quel est le titre complet du livre que vous recherchez ?", 'bot');
     } else if (action === 'browse') {
-      setConversationState('BROWSING_BOOKS');
+      setConversationState('BROWSING_BOOKS'); // Temporarily set, then reset to AWAITING_ACTION
       const availableBooks = listAvailableBooks();
       if (availableBooks.length > 0) {
         addMessage(`Voici les livres actuellement disponibles (${availableBooks.length}) :`, 'bot');
         availableBooks.forEach(book => {
-          // The price shown to buyer includes service fee, book.sellerPrice is just seller's take
-          const displayBook = {...book, sellerPrice: book.sellerPrice}; // For BookCard display, it adds fee.
-          // For chat message text, explicitly show total price
           const totalPriceForDisplay = book.sellerPrice + SERVICE_FEE;
-          addMessage(`${book.title} - Prix total: ${totalPriceForDisplay}F CFA`, 'bot', undefined, displayBook);
+          // Pass the original book to bookForDisplay, ChatMessage component handles adding fee for display consistency
+          addMessage(`${book.title} - Prix total: ${totalPriceForDisplay}F CFA`, 'bot', undefined, book);
         });
       } else {
         addMessage("Il n'y a aucun livre disponible pour le moment. Revenez plus tard !", 'bot');
@@ -323,12 +345,12 @@ export const useChatController = () => {
       await simulateBotTyping(300);
       setConversationState('AWAITING_ACTION');
       addMessage("Que souhaitez-vous faire d'autre ?", 'bot', undefined, undefined, [
-          { text: "Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialAction('sell'); } },
-          { text: "Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialAction('buy'); } },
-          { text: "Voir les livres", onClick: () => { addMessage("Je veux voir les livres.", 'user'); processInitialAction('browse'); } },
+          { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialAction('sell'); } },
+          { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialAction('buy'); } },
+          { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres.", 'user'); processInitialAction('browse'); } },
       ]);
     }
-  }, [addMessage, listAvailableBooks, simulateBotTyping]); // Removed handleUserInput from deps, processInitialAction calls itself or sets state
+  }, [addMessage, listAvailableBooks, simulateBotTyping]); 
 
   const handleInitialMessage = useCallback(async () => {
     await simulateBotTyping();
@@ -338,14 +360,16 @@ export const useChatController = () => {
       undefined,
       undefined,
       [
-        { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); processInitialAction('sell'); } },
-        { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); processInitialAction('buy'); } },
-        { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); processInitialAction('browse'); } },
+        { text: "📚 Vendre un livre", onClick: () => { addMessage("Je veux vendre un livre.", 'user'); simulateBotTyping().then(()=>processInitialAction('sell')); } },
+        { text: "🛒 Acheter un livre", onClick: () => { addMessage("Je veux acheter un livre.", 'user'); simulateBotTyping().then(()=>processInitialAction('buy')); } },
+        { text: "🔍 Parcourir les livres", onClick: () => { addMessage("Je veux voir les livres disponibles.", 'user'); simulateBotTyping().then(()=>processInitialAction('browse')); } },
       ]
     );
     setConversationState('AWAITING_ACTION');
   }, [addMessage, processInitialAction, simulateBotTyping]);
 
+  // Getter functions to ensure the latest versions of callbacks are used if they are called from within other callbacks
+  // that might have stale closures. This is particularly relevant for the action buttons.
   const getProcessInitialAction = () => processInitialAction;
   const getHandleInitialMessage = () => handleInitialMessage;
 
@@ -364,17 +388,14 @@ export const useChatController = () => {
         let bookForSystemMessage: BookType | undefined = undefined;
 
         if (notif.type === 'match' && notif.bookDetails) {
-            messageText += `\nLivre: ${notif.bookDetails.title}\nPrix Total: ${notif.totalPrice}F CFA.`; // totalPrice includes SERVICE_FEE
+            messageText += `\nLivre: ${notif.bookDetails.title}\nPrix Total: ${notif.totalPrice}F CFA.`; 
             messageText += `\nContactez le vendeur/acheteur via WhatsApp: ${notif.contactNumber}`;
             if (notif.buyerEmail) messageText += `\n(Notification également envoyée à ${notif.buyerEmail})`;
-            // For system messages displaying a book, ensure the price shown is the total price
-            bookForSystemMessage = {...notif.bookDetails, sellerPrice: notif.totalPrice! - SERVICE_FEE}; // Back-calculate sellerPrice for BookCard if it expects that
-        } else if (notif.type === 'success' && notif.bookDetails && notif.totalPrice) {
-            // This case might be for successful sale listing if we want to show the book again
-            // messageText is already good from BookContext: `Livre "${newBook.title}" ajouté avec succès ! Le prix affiché sera de ${newBook.sellerPrice + SERVICE_FEE}F CFA.`
+            bookForSystemMessage = notif.bookDetails; // ChatMessage component handles display price
+        } else if (notif.type === 'success' && notif.bookDetails) {
             bookForSystemMessage = notif.bookDetails;
         }
-        addMessage(messageText, 'system', undefined, bookForSystemMessage); // Send bookForSystemMessage here
+        addMessage(messageText, 'system', undefined, bookForSystemMessage); 
         clearNotification(notif.id);
       });
     }
